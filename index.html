@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cartas contra la Humanidad (GitHub Pages P2P Corregido)</title>
+  <title>Cartas contra la Humanidad (GitHub Pages P2P)</title>
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
@@ -15,38 +15,40 @@
     input, select, button { padding: 12px; border-radius: 8px; border: 2px solid #ddd; font-size: 1rem; width: 100%; }
     button { background: #111; color: white; font-weight: bold; cursor: pointer; border: none; }
     button.secondary { background: #e0e0e0; color: #111; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
     button:active { transform: scale(0.98); }
-    
+
     .card { padding: 16px; border-radius: 10px; text-align: center; font-weight: bold; min-height: 100px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
-    .black-card { background: #111; color: white; font-size: 1.1rem; }
+    .black-card { background: #111; color: white; font-size: 1.1rem; cursor: default; }
     .white-card { background: white; border: 2px solid #ddd; color: #111; }
     .white-card:hover { border-color: #111; }
-    
+    .white-card.winner { border-color: #2e7d32; background: #e8f5e9; }
+    .white-card.disabled { opacity: .45; cursor: default; pointer-events: none; }
+
     .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
     .badge-list { display: flex; flex-wrap: wrap; gap: 6px; }
-    .badge { background: #eee; padding: 6px 12px; border-radius: 20px; font-size: 0.85rem; font-weight: 600; }
+    .badge { background: #eee; padding: 6px 12px; border-radius: 20px; font-size: 0.85rem; font-weight: 600; white-space: nowrap; }
     .status { background: #eef6ff; color: #0056b3; padding: 10px; border-radius: 8px; text-align: center; font-weight: 600; font-size: 0.9rem; }
+    .status.warn { background: #fff3f3; color: #b3261e; }
     .share-link { background: #fff8e1; border: 1px dashed #ffa000; padding: 10px; border-radius: 8px; text-align: center; font-size: 0.9rem; word-break: break-all; }
   </style>
 </head>
 <body>
   <div class="app">
-    <h1>Cartas en Vivo (P2P Corregido)</h1>
+    <h1>Cartas en Vivo</h1>
 
     <div id="screen-menu" class="box">
       <input type="text" id="input-name" placeholder="Tu nombre..." maxlength="12">
       <button id="btn-create">Crear Sala (Host)</button>
       <hr style="border:0; border-top:1px solid #eee;">
-      <input type="text" id="input-code" placeholder="Código de Sala" style="text-transform:uppercase;">
+      <input type="text" id="input-code" placeholder="Código de Sala" style="text-transform:uppercase;" maxlength="5">
       <button id="btn-join" class="secondary">Unirse a Sala</button>
       <p id="menu-status" style="font-size:0.85rem; color:#d9534f; text-align:center; display:none;"></p>
     </div>
 
     <div id="screen-lobby" class="box hidden">
       <h2>Sala: <span id="text-room-code"></span></h2>
-      <div id="share-box" class="share-link">
-        Comparte el código con tus amigos.
-      </div>
+      <div id="share-box" class="share-link">Comparte el código con tus amigos.</div>
       <div>
         <p><strong>Jugadores conectados:</strong></p>
         <div id="lobby-players" class="badge-list" style="margin-top:8px;"></div>
@@ -59,6 +61,7 @@
           <option value="15">15 Rondas</option>
         </select>
         <button id="btn-start">Iniciar Partida</button>
+        <p id="start-hint" class="status warn hidden">Se necesitan al menos 2 jugadores.</p>
       </div>
       <p id="wait-msg" class="status">Esperando a que el anfitrión inicie la partida...</p>
     </div>
@@ -75,7 +78,7 @@
       <div id="status-box" class="status"></div>
 
       <div id="hand-section">
-        <p style="margin-bottom:8px;"><strong>Tus cartas de respuesta:</strong></p>
+        <p style="margin-bottom:8px;"><strong id="hand-title">Tus cartas de respuesta:</strong></p>
         <div id="hand-cards" class="grid"></div>
       </div>
 
@@ -89,19 +92,37 @@
       <h2>🏆 Partida Finalizada</h2>
       <p id="winner-text" style="font-size:1.2rem; text-align:center;"></p>
       <div id="final-scores" class="badge-list" style="justify-content:center;"></div>
-      <button onclick="location.reload()">Volver al Inicio</button>
+      <button onclick="location.href = location.pathname">Volver al Inicio</button>
     </div>
+
+    <div id="conn-banner" class="status warn hidden"></div>
   </div>
 
   <script>
-    const peerConfig = {
+    // STUN + TURN de respaldo. Con solo STUN la conexión falla entre muchas redes
+    // móviles / NAT simétricos / redes corporativas.
+    const peerOptions = {
+      debug: 1,
       config: {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' }
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:global.stun.twilio.com:3478' },
+          { urls: ['turn:openrelay.metered.ca:80', 'turn:openrelay.metered.ca:443', 'turn:openrelay.metered.ca:443?transport=tcp'],
+            username: 'openrelayproject', credential: 'openrelayproject' }
         ]
       }
     };
+
+    const MAX_PLAYERS = 8;
+    const MIN_PLAYERS = 2;
+    const HAND_SIZE = 7;
+    const NEXT_ROUND_DELAY = 3500;
+    const JOIN_TIMEOUT = 12000;
+    const HEARTBEAT_MS = 2000;
+    const DEAD_AFTER_MS = 9000;
+    let lastSeen = {};          // host: peerId -> timestamp ; cliente: 'host'
+    let heartbeatTimer = null;
 
     let peer = null;
     let myId = '';
@@ -109,54 +130,77 @@
     let roomCode = '';
     let myName = '';
     let hostConn = null;
-    let clientConns = [];
+    let clientConns = [];       // solo en el host
+    let nextRoundTimer = null;
+    let joinTimer = null;
+    let inRoom = false;
 
     let blackCardsData = [];
     let whiteCardsData = [];
+    let decksReady = null;
 
-    let gameState = {
-      state: 'LOBBY',
-      hostId: '',
-      code: '',
-      rounds: 10,
-      currentRound: 0,
-      zarIndex: 0,
-      players: [],
-      blackDeck: [],
-      whiteDeck: [],
-      currentBlackCard: null,
-      publicSubmissions: [],
-      allSubmitted: false,
-      roundWinner: null
-    };
+    let gameState = newGameState();
+    let lastState = null;       // último estado renderizado
+
+    function newGameState() {
+      return {
+        state: 'LOBBY',
+        hostId: '',
+        code: '',
+        rounds: 10,
+        currentRound: 0,
+        zarIndex: 0,
+        players: [],
+        blackDeck: [],
+        blackDiscard: [],
+        whiteDeck: [],
+        whiteDiscard: [],
+        currentBlackCard: null,
+        publicSubmissions: [],
+        allSubmitted: false,
+        winnerAnnounced: false,
+        roundWinner: null
+      };
+    }
 
     const $ = id => document.getElementById(id);
+
+    function esc(s) {
+      return String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+    }
 
     function showMenuError(msg) {
       const el = $('menu-status');
       el.innerText = msg;
       el.style.display = 'block';
+      $('btn-create').disabled = false;
+      $('btn-join').disabled = false;
     }
 
-    async function loadDecks() {
-      try {
-        const resB = await fetch('data/blackCards.json');
-        blackCardsData = await resB.json();
-        const resW = await fetch('data/whiteCards.json');
-        whiteCardsData = await resW.json();
-      } catch(e) {
-        console.error("Error cargando cartas", e);
-      }
+    function showBanner(msg) {
+      const el = $('conn-banner');
+      if (!msg) { el.classList.add('hidden'); return; }
+      el.innerText = msg;
+      el.classList.remove('hidden');
+    }
+
+    function loadDecks() {
+      decksReady = (async () => {
+        const [b, w] = await Promise.all([
+          fetch('data/blackCards.json').then(r => r.json()),
+          fetch('data/whiteCards.json').then(r => r.json())
+        ]);
+        blackCardsData = b;
+        whiteCardsData = w;
+      })();
+      decksReady.catch(e => console.error('Error cargando cartas', e));
     }
     loadDecks();
 
-    window.onload = () => {
-      const params = new URLSearchParams(window.location.search);
-      const urlCode = params.get('room');
-      if (urlCode) {
-        $('input-code').value = urlCode.toUpperCase();
-      }
-    };
+    window.addEventListener('load', () => {
+      const urlCode = new URLSearchParams(window.location.search).get('room');
+      if (urlCode) $('input-code').value = urlCode.toUpperCase();
+    });
 
     function shuffle(arr) {
       const copy = [...arr];
@@ -167,85 +211,206 @@
       return copy;
     }
 
+    function randomCode() {
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sin caracteres confusos
+      let c = '';
+      for (let i = 0; i < 5; i++) c += chars[Math.floor(Math.random() * chars.length)];
+      return c;
+    }
+
+    function destroyPeer() {
+      try { if (peer) peer.destroy(); } catch (e) {}
+      peer = null;
+      hostConn = null;
+      clientConns = [];
+    }
+
+    // ------------------------------------------------------------------
     // 1. CREAR SALA (HOST)
-    $('btn-create').onclick = () => {
+    // ------------------------------------------------------------------
+    $('btn-create').onclick = async () => {
       myName = $('input-name').value.trim();
       if (!myName) return showMenuError('Ingresa tu nombre');
+      if (!window.Peer) return showMenuError('No se pudo cargar PeerJS. Revisa tu conexión.');
+      $('menu-status').style.display = 'none';
+      $('btn-create').disabled = true;
+      $('btn-join').disabled = true;
+
+      try { await decksReady; } catch (e) { return showMenuError('No se pudieron cargar las cartas.'); }
 
       isHost = true;
-      roomCode = Math.random().toString(36).substring(2, 7).toUpperCase();
-      const peerId = 'cartas-p2p-' + roomCode;
+      createHostPeer(0);
+    };
 
-      peer = new Peer(peerId, peerConfig);
+    function createHostPeer(attempt) {
+      destroyPeer();
+      roomCode = randomCode();
+      const p = new Peer('cartas-p2p-' + roomCode, peerOptions);
+      peer = p;
 
-      peer.on('open', (id) => {
+      p.on('open', (id) => {
         myId = id;
+        gameState = newGameState();
         gameState.hostId = id;
         gameState.code = roomCode;
-        gameState.players.push({
-          id: id,
-          name: myName,
-          score: 0,
-          hand: [],
-          isReady: false,
-          submittedCard: null
-        });
+        gameState.players.push(makePlayer(id, myName));
+        inRoom = true;
+        startHeartbeat();
         setupLobbyUI();
       });
 
-      peer.on('connection', (conn) => {
-        conn.on('open', () => {
-          clientConns.push(conn);
-        });
+      p.on('connection', (conn) => {
+        clientConns.push(conn);
+        lastSeen[conn.peer] = Date.now();
 
         conn.on('data', (data) => handleHostData(conn, data));
-
-        conn.on('close', () => {
-          clientConns = clientConns.filter(c => c !== conn);
-          gameState.players = gameState.players.filter(p => p.id !== conn.peer);
-          broadcastState();
-        });
+        conn.on('close', () => handleClientLeft(conn));
+        conn.on('error', () => handleClientLeft(conn));
       });
 
-      peer.on('error', (err) => {
-        showMenuError('Error al crear sala. Intenta de nuevo.');
+      p.on('disconnected', () => {
+        // se perdió el servidor de señalización (pasa mucho en móviles); las
+        // conexiones ya establecidas siguen vivas, solo hay que reconectar
+        if (peer === p && !p.destroyed) {
+          setTimeout(() => { try { p.reconnect(); } catch (e) {} }, 1000);
+        }
       });
-    };
 
+      p.on('error', (err) => {
+        if (peer !== p) return;
+        if (!inRoom) {
+          // el código ya estaba tomado -> probar con otro
+          if (err.type === 'unavailable-id' && attempt < 5) return createHostPeer(attempt + 1);
+          destroyPeer();
+          showMenuError('Error al crear sala (' + err.type + '). Intenta de nuevo.');
+        } else {
+          console.warn('Error de peer (host):', err);
+        }
+      });
+    }
+
+    function makePlayer(id, name) {
+      return { id, name, score: 0, hand: [], isReady: false, submittedCard: null };
+    }
+
+    // ------------------------------------------------------------------
     // 2. UNIRSE A SALA (CLIENTE)
+    // ------------------------------------------------------------------
     $('btn-join').onclick = () => {
       myName = $('input-name').value.trim();
       roomCode = $('input-code').value.trim().toUpperCase();
       if (!myName || !roomCode) return showMenuError('Ingresa tu nombre y código');
+      if (!window.Peer) return showMenuError('No se pudo cargar PeerJS. Revisa tu conexión.');
+      $('menu-status').style.display = 'none';
+      $('btn-create').disabled = true;
+      $('btn-join').disabled = true;
 
       isHost = false;
-      peer = new Peer(peerConfig);
+      destroyPeer();
+      const p = new Peer(undefined, peerOptions);
+      peer = p;
+      let joined = false;
 
-      peer.on('open', (id) => {
+      clearTimeout(joinTimer);
+      joinTimer = setTimeout(() => {
+        if (!joined && peer === p) {
+          destroyPeer();
+          showMenuError('No se pudo conectar con la sala ' + roomCode + '. Revisa el código o inténtalo de nuevo.');
+        }
+      }, JOIN_TIMEOUT);
+
+      p.on('open', (id) => {
         myId = id;
-        const targetHostId = 'cartas-p2p-' + roomCode;
-        hostConn = peer.connect(targetHostId, { reliable: true });
+        const conn = p.connect('cartas-p2p-' + roomCode, { reliable: true, serialization: 'json' });
+        hostConn = conn;
 
-        hostConn.on('open', () => {
-          hostConn.send({ type: 'JOIN', name: myName, id: myId });
-          setupLobbyUI();
+        conn.on('open', () => {
+          conn.send({ type: 'JOIN', name: myName });
         });
 
-        hostConn.on('data', (data) => {
+        conn.on('data', (data) => {
+          if (!data) return;
+          lastSeen.host = Date.now();
+          if (data.type === 'PING') return;
           if (data.type === 'STATE') {
+            if (!joined) {
+              joined = true;
+              inRoom = true;
+              clearTimeout(joinTimer);
+              startHeartbeat();
+              setupLobbyUI();
+            }
             render(data.state);
+          } else if (data.type === 'REJECT') {
+            clearTimeout(joinTimer);
+            destroyPeer();
+            showMenuError(data.msg || 'No se pudo entrar a la sala.');
           }
         });
 
-        hostConn.on('error', (err) => {
-          showMenuError('Error de conexión con el Host.');
+        conn.on('close', () => {
+          if (peer !== p) return;
+          clearTimeout(joinTimer);
+          if (inRoom) {
+            hostLost();
+          } else {
+            destroyPeer();
+            showMenuError('No se pudo conectar con el Host.');
+          }
+        });
+
+        conn.on('error', () => {
+          if (!inRoom) { destroyPeer(); showMenuError('Error de conexión con el Host.'); }
         });
       });
 
-      peer.on('error', (err) => {
-        showMenuError('No se encontró la sala con el código ' + roomCode);
+      p.on('disconnected', () => {
+        if (peer === p && !p.destroyed) {
+          setTimeout(() => { try { p.reconnect(); } catch (e) {} }, 1000);
+        }
+      });
+
+      p.on('error', (err) => {
+        if (peer !== p) return;
+        if (err.type === 'peer-unavailable') {
+          clearTimeout(joinTimer);
+          destroyPeer();
+          showMenuError('No se encontró la sala con el código ' + roomCode);
+        } else if (!inRoom) {
+          clearTimeout(joinTimer);
+          destroyPeer();
+          showMenuError('Error de conexión (' + err.type + ').');
+        } else {
+          console.warn('Error de peer (cliente):', err);
+        }
       });
     };
+
+    function hostLost() {
+      if (!inRoom) return;
+      inRoom = false;
+      clearInterval(heartbeatTimer);
+      showBanner('Se perdió la conexión con el anfitrión. La partida terminó.');
+      setTimeout(() => { location.href = location.pathname; }, 4000);
+    }
+
+    // Latido: cerrar una pestaña de golpe no siempre avisa por WebRTC, así que
+    // ambos lados se mandan PING y se descarta a quien lleve callado demasiado.
+    function startHeartbeat() {
+      clearInterval(heartbeatTimer);
+      lastSeen = isHost ? lastSeen : { host: Date.now() };
+      heartbeatTimer = setInterval(() => {
+        const now = Date.now();
+        if (isHost) {
+          clientConns.forEach(c => { if (c.open) { try { c.send({ type: 'PING' }); } catch (e) {} } });
+          clientConns.filter(c => now - (lastSeen[c.peer] || now) > DEAD_AFTER_MS)
+                     .forEach(c => { handleClientLeft(c); try { c.close(); } catch (e) {} });
+        } else {
+          if (hostConn && hostConn.open) { try { hostConn.send({ type: 'PING' }); } catch (e) {} }
+          if (now - (lastSeen.host || now) > DEAD_AFTER_MS) hostLost();
+        }
+      }, HEARTBEAT_MS);
+    }
 
     function setupLobbyUI() {
       $('screen-menu').classList.add('hidden');
@@ -253,7 +418,7 @@
       $('text-room-code').innerText = roomCode;
 
       const url = `${window.location.origin}${window.location.pathname}?room=${roomCode}`;
-      $('share-box').innerHTML = `Código: <strong>${roomCode}</strong><br><small>Link: ${url}</small>`;
+      $('share-box').innerHTML = `Código: <strong>${esc(roomCode)}</strong><br><small>Link: ${esc(url)}</small>`;
 
       if (isHost) {
         $('host-controls').classList.remove('hidden');
@@ -262,31 +427,98 @@
       }
     }
 
+    // ------------------------------------------------------------------
+    // HOST: mensajes y jugadores
+    // ------------------------------------------------------------------
     function handleHostData(conn, data) {
+      if (!data || typeof data !== 'object') return;
+      const pId = conn.peer; // el id real viene de la conexión, no del mensaje
+      lastSeen[pId] = Date.now();
+      if (data.type === 'PING') return;
+
       if (data.type === 'JOIN') {
-        if (gameState.state !== 'LOBBY') return;
-        if (!gameState.players.some(p => p.id === data.id)) {
-          gameState.players.push({
-            id: data.id,
-            name: data.name,
-            score: 0,
-            hand: [],
-            isReady: false,
-            submittedCard: null
-          });
+        if (gameState.state !== 'LOBBY') {
+          conn.send({ type: 'REJECT', msg: 'La partida ya comenzó.' });
+          return;
+        }
+        if (gameState.players.length >= MAX_PLAYERS && !gameState.players.some(p => p.id === pId)) {
+          conn.send({ type: 'REJECT', msg: 'La sala está llena.' });
+          return;
+        }
+        if (!gameState.players.some(p => p.id === pId)) {
+          const name = String(data.name || 'Jugador').trim().slice(0, 12) || 'Jugador';
+          gameState.players.push(makePlayer(pId, name));
         }
         broadcastState();
       } else if (data.type === 'SUBMIT') {
-        processSubmitCard(data.playerId, data.cardId);
+        processSubmitCard(pId, data.cardId);
       } else if (data.type === 'SELECT_WINNER') {
-        processSelectWinner(data.playerId, data.cardId);
+        processSelectWinner(pId, data.cardId);
       }
+    }
+
+    function handleClientLeft(conn) {
+      if (!clientConns.includes(conn)) return;
+      clientConns = clientConns.filter(c => c !== conn);
+      removePlayer(conn.peer);
+    }
+
+    function removePlayer(pId) {
+      const idx = gameState.players.findIndex(p => p.id === pId);
+      if (idx === -1) return;
+
+      if (gameState.state !== 'PLAYING') {
+        gameState.players.splice(idx, 1);
+        broadcastState();
+        return;
+      }
+
+      const wasZar = idx === gameState.zarIndex;
+      const [gone] = gameState.players.splice(idx, 1);
+      gameState.whiteDiscard.push(...gone.hand);
+      if (gone.submittedCard) gameState.whiteDiscard.push(gone.submittedCard.card);
+
+      if (gameState.players.length < MIN_PLAYERS) {
+        clearTimeout(nextRoundTimer);
+        gameState.state = 'ENDED';
+        broadcastState();
+        return;
+      }
+
+      if (idx < gameState.zarIndex) gameState.zarIndex--;
+      if (gameState.zarIndex >= gameState.players.length) gameState.zarIndex = 0;
+
+      if (gameState.winnerAnnounced) {
+        // ya hay ganador y un temporizador de siguiente ronda en marcha
+        broadcastState();
+      } else if (wasZar) {
+        // el Zar se fue: se repite la ronda con otro Zar
+        returnSubmissionsToHands();
+        gameState.currentRound--;
+        gameState.blackDiscard.push(gameState.currentBlackCard);
+        startNextRound();
+      } else {
+        checkAllSubmitted();
+        broadcastState();
+      }
+    }
+
+    function returnSubmissionsToHands() {
+      gameState.players.forEach(p => {
+        if (p.submittedCard) {
+          p.hand.push(p.submittedCard.card);
+          p.submittedCard = null;
+        }
+        p.isReady = false;
+      });
+      gameState.allSubmitted = false;
+      gameState.publicSubmissions = [];
     }
 
     function broadcastState() {
       clientConns.forEach(conn => {
         if (conn.open) {
-          conn.send({ type: 'STATE', state: getClientState(conn.peer) });
+          try { conn.send({ type: 'STATE', state: getClientState(conn.peer) }); } catch (e) { console.warn(e); }
         }
       });
       render(getClientState(myId));
@@ -295,6 +527,7 @@
     function getClientState(pId) {
       const zar = gameState.players[gameState.zarIndex];
       const player = gameState.players.find(p => p.id === pId);
+      const showSubs = gameState.allSubmitted || gameState.winnerAnnounced;
 
       return {
         code: gameState.code,
@@ -302,137 +535,201 @@
         hostId: gameState.hostId,
         currentRound: gameState.currentRound,
         totalRounds: gameState.rounds,
-        isZar: zar?.id === pId,
+        isZar: !!zar && zar.id === pId,
         zarName: zar ? zar.name : '',
         blackCard: gameState.currentBlackCard,
         myHand: player ? player.hand : [],
+        myReady: player ? player.isReady : false,
+        allSubmitted: gameState.allSubmitted,
+        winnerAnnounced: gameState.winnerAnnounced,
         players: gameState.players.map(p => ({
           id: p.id,
           name: p.name,
           score: p.score,
           isReady: p.isReady,
-          isZar: p.id === zar?.id
+          isZar: !!zar && p.id === zar.id
         })),
-        submissions: (gameState.allSubmitted || gameState.winnerAnnounced) ? gameState.publicSubmissions : [],
+        submissions: showSubs ? gameState.publicSubmissions : [],
         roundWinner: gameState.roundWinner || null
       };
     }
 
+    // ------------------------------------------------------------------
+    // HOST: flujo de la partida
+    // ------------------------------------------------------------------
     $('btn-start').onclick = () => {
-      if (!isHost) return;
+      if (!isHost || gameState.state !== 'LOBBY') return;
+      if (gameState.players.length < MIN_PLAYERS) {
+        $('start-hint').classList.remove('hidden');
+        return;
+      }
       gameState.state = 'PLAYING';
       gameState.rounds = parseInt($('select-rounds').value) || 10;
+      gameState.currentRound = 0;
       gameState.blackDeck = shuffle(blackCardsData);
       gameState.whiteDeck = shuffle(whiteCardsData);
+      gameState.blackDiscard = [];
+      gameState.whiteDiscard = [];
       gameState.zarIndex = Math.floor(Math.random() * gameState.players.length);
 
       startNextRound();
     };
 
+    function drawWhite() {
+      if (gameState.whiteDeck.length === 0 && gameState.whiteDiscard.length > 0) {
+        gameState.whiteDeck = shuffle(gameState.whiteDiscard);
+        gameState.whiteDiscard = [];
+      }
+      return gameState.whiteDeck.pop();
+    }
+
+    function drawBlack() {
+      if (gameState.blackDeck.length === 0 && gameState.blackDiscard.length > 0) {
+        gameState.blackDeck = shuffle(gameState.blackDiscard);
+        gameState.blackDiscard = [];
+      }
+      return gameState.blackDeck.pop();
+    }
+
     function startNextRound() {
+      clearTimeout(nextRoundTimer);
       gameState.currentRound++;
       gameState.allSubmitted = false;
       gameState.winnerAnnounced = false;
       gameState.roundWinner = null;
       gameState.publicSubmissions = [];
 
-      if (gameState.currentRound > gameState.rounds || gameState.blackDeck.length === 0) {
+      if (gameState.currentRound > gameState.rounds) {
         gameState.state = 'ENDED';
         broadcastState();
         return;
       }
 
-      gameState.currentBlackCard = gameState.blackDeck.pop();
+      gameState.currentBlackCard = drawBlack() || { id: 0, text: '____' };
+
+      // El mazo de respuestas es pequeño: la mano se ajusta para que alcance
+      // para todos, y las cartas jugadas se reciclan.
+      const totalWhite = whiteCardsData.length;
+      const handSize = Math.max(2, Math.min(HAND_SIZE, Math.floor(totalWhite / (gameState.players.length + 1))));
 
       gameState.players.forEach(p => {
         p.isReady = false;
         p.submittedCard = null;
-        while (p.hand.length < 7 && gameState.whiteDeck.length > 0) {
-          p.hand.push(gameState.whiteDeck.pop());
+        while (p.hand.length < handSize) {
+          const c = drawWhite();
+          if (!c) break;
+          p.hand.push(c);
         }
       });
 
       broadcastState();
     }
 
+    function checkAllSubmitted() {
+      const zar = gameState.players[gameState.zarIndex];
+      if (!zar || gameState.allSubmitted || gameState.winnerAnnounced) return;
+      const active = gameState.players.filter(p => p.id !== zar.id);
+      if (active.length > 0 && active.every(p => p.isReady)) {
+        gameState.allSubmitted = true;
+        gameState.publicSubmissions = shuffle(active.map(p => p.submittedCard.card));
+      }
+    }
+
     function processSubmitCard(pId, cardId) {
+      if (gameState.state !== 'PLAYING' || gameState.allSubmitted || gameState.winnerAnnounced) return;
       const zar = gameState.players[gameState.zarIndex];
       const player = gameState.players.find(p => p.id === pId);
+      if (!zar || !player || player.id === zar.id || player.isReady) return;
 
-      if (player && player.id !== zar.id && !player.isReady) {
-        const idx = player.hand.findIndex(c => c.id === cardId);
-        if (idx !== -1) {
-          const [card] = player.hand.splice(idx, 1);
-          player.submittedCard = { card, playerId: player.id };
-          player.isReady = true;
+      const idx = player.hand.findIndex(c => c.id === cardId);
+      if (idx === -1) return;
 
-          const activeParticipants = gameState.players.filter(p => p.id !== zar.id);
-          if (activeParticipants.every(p => p.isReady)) {
-            gameState.allSubmitted = true;
-            const submissions = activeParticipants.map(p => p.submittedCard);
-            gameState.publicSubmissions = shuffle(submissions.map(s => s.card));
-          }
+      const [card] = player.hand.splice(idx, 1);
+      player.submittedCard = { card, playerId: player.id };
+      player.isReady = true;
 
-          broadcastState();
-        }
-      }
+      checkAllSubmitted();
+      broadcastState();
     }
 
     function processSelectWinner(pId, cardId) {
+      if (gameState.state !== 'PLAYING') return;
       const zar = gameState.players[gameState.zarIndex];
-      if (zar.id === pId && gameState.allSubmitted) {
-        let winnerPlayer = null;
-        let winningCard = null;
+      // winnerAnnounced evita que un doble clic elija dos ganadores y salte rondas
+      if (!zar || zar.id !== pId || !gameState.allSubmitted || gameState.winnerAnnounced) return;
 
-        for (const p of gameState.players) {
-          if (p.submittedCard && p.submittedCard.card.id === cardId) {
-            winnerPlayer = p;
-            winningCard = p.submittedCard.card;
-            p.score += 1;
-            break;
-          }
-        }
+      const winnerPlayer = gameState.players.find(p => p.submittedCard && p.submittedCard.card.id === cardId);
+      if (!winnerPlayer) return;
 
-        gameState.winnerAnnounced = true;
-        gameState.roundWinner = {
-          name: winnerPlayer ? winnerPlayer.name : 'Alguien',
-          cardText: winningCard ? winningCard.text : ''
-        };
+      winnerPlayer.score += 1;
+      gameState.winnerAnnounced = true;
+      gameState.roundWinner = {
+        name: winnerPlayer.name,
+        cardId: winnerPlayer.submittedCard.card.id,
+        cardText: winnerPlayer.submittedCard.card.text
+      };
 
-        gameState.zarIndex = (gameState.zarIndex + 1) % gameState.players.length;
-        broadcastState();
+      // las cartas jugadas y la negra pasan al descarte para reciclarse
+      gameState.players.forEach(p => {
+        if (p.submittedCard) gameState.whiteDiscard.push(p.submittedCard.card);
+      });
+      if (gameState.currentBlackCard) gameState.blackDiscard.push(gameState.currentBlackCard);
 
-        setTimeout(() => {
-          startNextRound();
-        }, 3500);
-      }
+      gameState.zarIndex = (gameState.zarIndex + 1) % gameState.players.length;
+      broadcastState();
+
+      clearTimeout(nextRoundTimer);
+      nextRoundTimer = setTimeout(startNextRound, NEXT_ROUND_DELAY);
     }
 
+    // ------------------------------------------------------------------
+    // Acciones del jugador
+    // ------------------------------------------------------------------
     function submitCard(cardId) {
+      if (lastState && (lastState.myReady || lastState.isZar || lastState.allSubmitted)) return;
       if (isHost) {
         processSubmitCard(myId, cardId);
       } else if (hostConn && hostConn.open) {
-        hostConn.send({ type: 'SUBMIT', playerId: myId, cardId });
+        hostConn.send({ type: 'SUBMIT', cardId });
       }
-      $('status-box').innerText = '✓ Carta enviada. Esperando a los demás...';
     }
 
     function selectWinner(cardId) {
+      if (lastState && (!lastState.isZar || lastState.winnerAnnounced)) return;
       if (isHost) {
         processSelectWinner(myId, cardId);
       } else if (hostConn && hostConn.open) {
-        hostConn.send({ type: 'SELECT_WINNER', playerId: myId, cardId });
+        hostConn.send({ type: 'SELECT_WINNER', cardId });
       }
     }
 
+    // delegación de eventos (sin inline onclick con datos del usuario)
+    $('hand-cards').addEventListener('click', e => {
+      const el = e.target.closest('[data-card]');
+      if (el) submitCard(Number(el.dataset.card));
+    });
+    $('zar-cards').addEventListener('click', e => {
+      const el = e.target.closest('[data-card]');
+      if (el) selectWinner(Number(el.dataset.card));
+    });
+
+    // ------------------------------------------------------------------
+    // Render
+    // ------------------------------------------------------------------
     function render(state) {
+      lastState = state;
+
       if (state.state === 'LOBBY') {
-        $('lobby-players').innerHTML = state.players.map(p => 
-          `<span class="badge">${p.name} ${p.id === state.hostId ? '(Host)' : ''}</span>`
+        $('lobby-players').innerHTML = state.players.map(p =>
+          `<span class="badge">${esc(p.name)} ${p.id === state.hostId ? '(Host)' : ''}</span>`
         ).join('');
+        if (isHost) {
+          $('start-hint').classList.toggle('hidden', state.players.length >= MIN_PLAYERS);
+        }
 
       } else if (state.state === 'PLAYING') {
         $('screen-lobby').classList.add('hidden');
+        $('screen-end').classList.add('hidden');
         $('screen-game').classList.remove('hidden');
 
         $('text-round').innerText = `Ronda ${state.currentRound} / ${state.totalRounds}`;
@@ -440,42 +737,63 @@
         $('black-card').innerText = state.blackCard ? state.blackCard.text : '';
 
         $('scoreboard').innerHTML = state.players.map(p =>
-          `<span class="badge">${p.name}: ${p.score}pt ${p.isReady ? '✓' : ''}</span>`
+          `<span class="badge">${p.isZar ? '👑 ' : ''}${esc(p.name)}: ${p.score}pt ${(p.isReady && !p.isZar) ? '✓' : ''}</span>`
         ).join('');
+
+        const waiting = state.players.filter(p => !p.isZar && !p.isReady).length;
 
         if (state.roundWinner) {
           $('status-box').innerText = `🎉 ${state.roundWinner.name} ganó con: "${state.roundWinner.cardText}"`;
         } else if (state.isZar) {
-          $('status-box').innerText = state.submissions.length > 0 ? 'Elige la respuesta ganadora:' : 'Eres el Zar. Esperando respuestas...';
+          $('status-box').innerText = state.allSubmitted
+            ? 'Elige la respuesta ganadora:'
+            : `Eres el Zar. Esperando respuestas (faltan ${waiting})...`;
+        } else if (state.myReady) {
+          $('status-box').innerText = state.allSubmitted
+            ? `✓ Carta enviada. ${esc(state.zarName)} está eligiendo...`
+            : `✓ Carta enviada. Esperando a los demás (faltan ${waiting})...`;
         } else {
           $('status-box').innerText = 'Elige tu mejor carta de respuesta:';
         }
 
+        const showSubs = state.submissions.length > 0;
+        const winnerId = state.roundWinner ? state.roundWinner.cardId : null;
+
         if (state.isZar) {
           $('hand-section').classList.add('hidden');
           $('zar-section').classList.remove('hidden');
-
           $('zar-cards').innerHTML = state.submissions.map(c =>
-            `<div class="card white-card" onclick="selectWinner(${c.id})">${c.text}</div>`
+            `<div class="card white-card${c.id === winnerId ? ' winner' : ''}${state.winnerAnnounced ? ' disabled' : ''}" data-card="${c.id}">${esc(c.text)}</div>`
           ).join('');
-
+        } else if (showSubs) {
+          // todos ya respondieron: los participantes ven las respuestas en pantalla
+          $('zar-section').classList.add('hidden');
+          $('hand-section').classList.remove('hidden');
+          $('hand-title').innerText = 'Respuestas de la ronda:';
+          $('hand-cards').innerHTML = state.submissions.map(c =>
+            `<div class="card white-card disabled${c.id === winnerId ? ' winner' : ''}">${esc(c.text)}</div>`
+          ).join('');
         } else {
           $('zar-section').classList.add('hidden');
           $('hand-section').classList.remove('hidden');
-
+          $('hand-title').innerText = 'Tus cartas de respuesta:';
           $('hand-cards').innerHTML = state.myHand.map(c =>
-            `<div class="card white-card" onclick="submitCard(${c.id})">${c.text}</div>`
+            `<div class="card white-card${state.myReady ? ' disabled' : ''}" data-card="${c.id}">${esc(c.text)}</div>`
           ).join('');
         }
 
       } else if (state.state === 'ENDED') {
+        $('screen-lobby').classList.add('hidden');
         $('screen-game').classList.add('hidden');
         $('screen-end').classList.remove('hidden');
 
-        const sorted = [...state.players].sort((a,b) => b.score - a.score);
-        $('winner-text').innerText = `¡${sorted[0].name} es el Ganador!`;
+        const sorted = [...state.players].sort((a, b) => b.score - a.score);
+        const top = sorted.filter(p => p.score === sorted[0].score);
+        $('winner-text').innerText = top.length > 1
+          ? `¡Empate entre ${top.map(p => p.name).join(' y ')}!`
+          : `¡${sorted[0].name} es el Ganador!`;
         $('final-scores').innerHTML = sorted.map(p =>
-          `<span class="badge">${p.name}: ${p.score} pts</span>`
+          `<span class="badge">${esc(p.name)}: ${p.score} pts</span>`
         ).join('');
       }
     }
