@@ -3,11 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cartas contra la Humanidad (GitHub Pages)</title>
-  <!-- PeerJS CDN para conexión P2P sin servidor -->
+  <title>Cartas contra la Humanidad (GitHub Pages P2P Corregido)</title>
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, sans-serif; }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
     body { background: #f0f0f4; color: #111; padding: 15px; display: flex; justify-content: center; }
     .app { width: 100%; max-width: 500px; display: flex; flex-direction: column; gap: 15px; }
     h1 { text-align: center; font-size: 1.5rem; margin-bottom: 5px; }
@@ -32,22 +31,21 @@
 </head>
 <body>
   <div class="app">
-    <h1>Cartas en Vivo (P2P)</h1>
+    <h1>Cartas en Vivo (P2P Corregido)</h1>
 
-    <!-- MENÚ INICIAL -->
     <div id="screen-menu" class="box">
       <input type="text" id="input-name" placeholder="Tu nombre..." maxlength="12">
       <button id="btn-create">Crear Sala (Host)</button>
       <hr style="border:0; border-top:1px solid #eee;">
       <input type="text" id="input-code" placeholder="Código de Sala" style="text-transform:uppercase;">
       <button id="btn-join" class="secondary">Unirse a Sala</button>
+      <p id="menu-status" style="font-size:0.85rem; color:#d9534f; text-align:center; display:none;"></p>
     </div>
 
-    <!-- LOBBY -->
     <div id="screen-lobby" class="box hidden">
       <h2>Sala: <span id="text-room-code"></span></h2>
       <div id="share-box" class="share-link">
-        Comparte el código con tus amigos o envíales el enlace directo.
+        Comparte el código con tus amigos.
       </div>
       <div>
         <p><strong>Jugadores conectados:</strong></p>
@@ -65,7 +63,6 @@
       <p id="wait-msg" class="status">Esperando a que el anfitrión inicie la partida...</p>
     </div>
 
-    <!-- JUEGO -->
     <div id="screen-game" class="box hidden">
       <div style="display:flex; justify-content:space-between; align-items:center;">
         <span id="text-round" class="badge">Ronda 1</span>
@@ -77,20 +74,17 @@
       <div class="card black-card" id="black-card">...</div>
       <div id="status-box" class="status"></div>
 
-      <!-- MANO PARTICIPANTE -->
       <div id="hand-section">
         <p style="margin-bottom:8px;"><strong>Tus cartas de respuesta:</strong></p>
         <div id="hand-cards" class="grid"></div>
       </div>
 
-      <!-- VISTA ZAR -->
       <div id="zar-section" class="hidden">
         <p style="margin-bottom:8px;"><strong>Respuestas (Haz clic para elegir la ganadora):</strong></p>
         <div id="zar-cards" class="grid"></div>
       </div>
     </div>
 
-    <!-- PANTALLA FINAL -->
     <div id="screen-end" class="box hidden">
       <h2>🏆 Partida Finalizada</h2>
       <p id="winner-text" style="font-size:1.2rem; text-align:center;"></p>
@@ -100,21 +94,26 @@
   </div>
 
   <script>
+    const peerConfig = {
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' }
+        ]
+      }
+    };
+
     let peer = null;
     let myId = '';
     let isHost = false;
     let roomCode = '';
     let myName = '';
-    
-    // Conexiones P2P
-    let hostConn = null; // Para clientes
-    let clientConns = []; // Para el Host
+    let hostConn = null;
+    let clientConns = [];
 
-    // Base de Datos de Cartas
     let blackCardsData = [];
     let whiteCardsData = [];
 
-    // Estado del juego (Solo mantenido por el Host)
     let gameState = {
       state: 'LOBBY',
       hostId: '',
@@ -133,16 +132,24 @@
 
     const $ = id => document.getElementById(id);
 
-    // Cargar cartas desde los JSON estáticos
+    function showMenuError(msg) {
+      const el = $('menu-status');
+      el.innerText = msg;
+      el.style.display = 'block';
+    }
+
     async function loadDecks() {
-      const resB = await fetch('data/blackCards.json');
-      blackCardsData = await resB.json();
-      const resW = await fetch('data/whiteCards.json');
-      whiteCardsData = await resW.json();
+      try {
+        const resB = await fetch('data/blackCards.json');
+        blackCardsData = await resB.json();
+        const resW = await fetch('data/whiteCards.json');
+        whiteCardsData = await resW.json();
+      } catch(e) {
+        console.error("Error cargando cartas", e);
+      }
     }
     loadDecks();
 
-    // Auto-comprobar si hay código en la URL (?room=XXXX)
     window.onload = () => {
       const params = new URLSearchParams(window.location.search);
       const urlCode = params.get('room');
@@ -163,13 +170,13 @@
     // 1. CREAR SALA (HOST)
     $('btn-create').onclick = () => {
       myName = $('input-name').value.trim();
-      if (!myName) return alert('Ingresa tu nombre');
+      if (!myName) return showMenuError('Ingresa tu nombre');
 
       isHost = true;
       roomCode = Math.random().toString(36).substring(2, 7).toUpperCase();
-      const peerId = 'cartas-' + roomCode;
+      const peerId = 'cartas-p2p-' + roomCode;
 
-      peer = new Peer(peerId);
+      peer = new Peer(peerId, peerConfig);
 
       peer.on('open', (id) => {
         myId = id;
@@ -183,20 +190,25 @@
           isReady: false,
           submittedCard: null
         });
-
         setupLobbyUI();
       });
 
       peer.on('connection', (conn) => {
-        clientConns.push(conn);
+        conn.on('open', () => {
+          clientConns.push(conn);
+        });
+
         conn.on('data', (data) => handleHostData(conn, data));
+
         conn.on('close', () => {
           clientConns = clientConns.filter(c => c !== conn);
+          gameState.players = gameState.players.filter(p => p.id !== conn.peer);
+          broadcastState();
         });
       });
 
       peer.on('error', (err) => {
-        alert('Error al crear sala: ' + err.type);
+        showMenuError('Error al crear sala. Intenta de nuevo.');
       });
     };
 
@@ -204,15 +216,15 @@
     $('btn-join').onclick = () => {
       myName = $('input-name').value.trim();
       roomCode = $('input-code').value.trim().toUpperCase();
-      if (!myName || !roomCode) return alert('Ingresa tu nombre y código');
+      if (!myName || !roomCode) return showMenuError('Ingresa tu nombre y código');
 
       isHost = false;
-      peer = new Peer();
+      peer = new Peer(peerConfig);
 
       peer.on('open', (id) => {
         myId = id;
-        const targetHostId = 'cartas-' + roomCode;
-        hostConn = peer.connect(targetHostId);
+        const targetHostId = 'cartas-p2p-' + roomCode;
+        hostConn = peer.connect(targetHostId, { reliable: true });
 
         hostConn.on('open', () => {
           hostConn.send({ type: 'JOIN', name: myName, id: myId });
@@ -225,9 +237,13 @@
           }
         });
 
-        hostConn.on('error', () => {
-          alert('No se pudo conectar a la sala.');
+        hostConn.on('error', (err) => {
+          showMenuError('Error de conexión con el Host.');
         });
+      });
+
+      peer.on('error', (err) => {
+        showMenuError('No se encontró la sala con el código ' + roomCode);
       });
     };
 
@@ -246,18 +262,19 @@
       }
     }
 
-    // MANEJO DE EVENTOS EN EL HOST
     function handleHostData(conn, data) {
       if (data.type === 'JOIN') {
         if (gameState.state !== 'LOBBY') return;
-        gameState.players.push({
-          id: data.id,
-          name: data.name,
-          score: 0,
-          hand: [],
-          isReady: false,
-          submittedCard: null
-        });
+        if (!gameState.players.some(p => p.id === data.id)) {
+          gameState.players.push({
+            id: data.id,
+            name: data.name,
+            score: 0,
+            hand: [],
+            isReady: false,
+            submittedCard: null
+          });
+        }
         broadcastState();
       } else if (data.type === 'SUBMIT') {
         processSubmitCard(data.playerId, data.cardId);
@@ -267,15 +284,11 @@
     }
 
     function broadcastState() {
-      const zar = gameState.players[gameState.zarIndex];
-
-      // Enviar a cada cliente su estado personalizado
       clientConns.forEach(conn => {
-        const pId = conn.peer;
-        conn.send({ type: 'STATE', state: getClientState(pId) });
+        if (conn.open) {
+          conn.send({ type: 'STATE', state: getClientState(conn.peer) });
+        }
       });
-
-      // Renderizar el estado del Host
       render(getClientState(myId));
     }
 
@@ -305,7 +318,6 @@
       };
     }
 
-    // LÓGICA DE JUEGO (SOLO HOST)
     $('btn-start').onclick = () => {
       if (!isHost) return;
       gameState.state = 'PLAYING';
@@ -396,11 +408,10 @@
       }
     }
 
-    // ACCIONES DE CLIENTE
     function submitCard(cardId) {
       if (isHost) {
         processSubmitCard(myId, cardId);
-      } else {
+      } else if (hostConn && hostConn.open) {
         hostConn.send({ type: 'SUBMIT', playerId: myId, cardId });
       }
       $('status-box').innerText = '✓ Carta enviada. Esperando a los demás...';
@@ -409,12 +420,11 @@
     function selectWinner(cardId) {
       if (isHost) {
         processSelectWinner(myId, cardId);
-      } else {
+      } else if (hostConn && hostConn.open) {
         hostConn.send({ type: 'SELECT_WINNER', playerId: myId, cardId });
       }
     }
 
-    // RENDERIZAR EN INTERFAZ
     function render(state) {
       if (state.state === 'LOBBY') {
         $('lobby-players').innerHTML = state.players.map(p => 
