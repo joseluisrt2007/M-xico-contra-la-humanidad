@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cartas contra la Humanidad (GitHub Pages)</title>
+  <!-- PeerJS CDN para conexión P2P sin servidor -->
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, sans-serif; }
+    body { background: #f0f0f4; color: #111; padding: 15px; display: flex; justify-content: center; }
+    .app { width: 100%; max-width: 500px; display: flex; flex-direction: column; gap: 15px; }
+    h1 { text-align: center; font-size: 1.5rem; margin-bottom: 5px; }
+    .box { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.08); display: flex; flex-direction: column; gap: 12px; }
+    .hidden { display: none !important; }
+    input, select, button { padding: 12px; border-radius: 8px; border: 2px solid #ddd; font-size: 1rem; width: 100%; }
+    button { background: #111; color: white; font-weight: bold; cursor: pointer; border: none; }
+    button.secondary { background: #e0e0e0; color: #111; }
+    button:active { transform: scale(0.98); }
+    
+    .card { padding: 16px; border-radius: 10px; text-align: center; font-weight: bold; min-height: 100px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+    .black-card { background: #111; color: white; font-size: 1.1rem; }
+    .white-card { background: white; border: 2px solid #ddd; color: #111; }
+    .white-card:hover { border-color: #111; }
+    
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+    .badge-list { display: flex; flex-wrap: wrap; gap: 6px; }
+    .badge { background: #eee; padding: 6px 12px; border-radius: 20px; font-size: 0.85rem; font-weight: 600; }
+    .status { background: #eef6ff; color: #0056b3; padding: 10px; border-radius: 8px; text-align: center; font-weight: 600; font-size: 0.9rem; }
+    .share-link { background: #fff8e1; border: 1px dashed #ffa000; padding: 10px; border-radius: 8px; text-align: center; font-size: 0.9rem; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <h1>Cartas en Vivo (P2P)</h1>
+
+    <!-- MENÚ INICIAL -->
+    <div id="screen-menu" class="box">
+      <input type="text" id="input-name" placeholder="Tu nombre..." maxlength="12">
+      <button id="btn-create">Crear Sala (Host)</button>
+      <hr style="border:0; border-top:1px solid #eee;">
+      <input type="text" id="input-code" placeholder="Código de Sala" style="text-transform:uppercase;">
+      <button id="btn-join" class="secondary">Unirse a Sala</button>
+    </div>
+
+    <!-- LOBBY -->
+    <div id="screen-lobby" class="box hidden">
+      <h2>Sala: <span id="text-room-code"></span></h2>
+      <div id="share-box" class="share-link">
+        Comparte el código con tus amigos o envíales el enlace directo.
+      </div>
+      <div>
+        <p><strong>Jugadores conectados:</strong></p>
+        <div id="lobby-players" class="badge-list" style="margin-top:8px;"></div>
+      </div>
+      <div id="host-controls" class="hidden" style="display:flex; flex-direction:column; gap:10px;">
+        <label>Número de Rondas:</label>
+        <select id="select-rounds">
+          <option value="5">5 Rondas</option>
+          <option value="10" selected>10 Rondas</option>
+          <option value="15">15 Rondas</option>
+        </select>
+        <button id="btn-start">Iniciar Partida</button>
+      </div>
+      <p id="wait-msg" class="status">Esperando a que el anfitrión inicie la partida...</p>
+    </div>
+
+    <!-- JUEGO -->
+    <div id="screen-game" class="box hidden">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <span id="text-round" class="badge">Ronda 1</span>
+        <span id="text-role" class="badge" style="background:#ffd700;">Rol: -</span>
+      </div>
+
+      <div style="display:flex; gap:6px; overflow-x:auto;" id="scoreboard"></div>
+
+      <div class="card black-card" id="black-card">...</div>
+      <div id="status-box" class="status"></div>
+
+      <!-- MANO PARTICIPANTE -->
+      <div id="hand-section">
+        <p style="margin-bottom:8px;"><strong>Tus cartas de respuesta:</strong></p>
+        <div id="hand-cards" class="grid"></div>
+      </div>
+
+      <!-- VISTA ZAR -->
+      <div id="zar-section" class="hidden">
+        <p style="margin-bottom:8px;"><strong>Respuestas (Haz clic para elegir la ganadora):</strong></p>
+        <div id="zar-cards" class="grid"></div>
+      </div>
+    </div>
+
+    <!-- PANTALLA FINAL -->
+    <div id="screen-end" class="box hidden">
+      <h2>🏆 Partida Finalizada</h2>
+      <p id="winner-text" style="font-size:1.2rem; text-align:center;"></p>
+      <div id="final-scores" class="badge-list" style="justify-content:center;"></div>
+      <button onclick="location.reload()">Volver al Inicio</button>
+    </div>
+  </div>
+
+  <script>
+    let peer = null;
+    let myId = '';
+    let isHost = false;
+    let roomCode = '';
+    let myName = '';
+    
+    // Conexiones P2P
+    let hostConn = null; // Para clientes
+    let clientConns = []; // Para el Host
+
+    // Base de Datos de Cartas
+    let blackCardsData = [];
+    let whiteCardsData = [];
+
+    // Estado del juego (Solo mantenido por el Host)
+    let gameState = {
+      state: 'LOBBY',
+      hostId: '',
+      code: '',
+      rounds: 10,
+      currentRound: 0,
+      zarIndex: 0,
+      players: [],
+      blackDeck: [],
+      whiteDeck: [],
+      currentBlackCard: null,
+      publicSubmissions: [],
+      allSubmitted: false,
+      roundWinner: null
+    };
+
+    const $ = id => document.getElementById(id);
+
+    // Cargar cartas desde los JSON estáticos
+    async function loadDecks() {
+      const resB = await fetch('data/blackCards.json');
+      blackCardsData = await resB.json();
+      const resW = await fetch('data/whiteCards.json');
+      whiteCardsData = await resW.json();
+    }
+    loadDecks();
+
+    // Auto-comprobar si hay código en la URL (?room=XXXX)
+    window.onload = () => {
+      const params = new URLSearchParams(window.location.search);
+      const urlCode = params.get('room');
+      if (urlCode) {
+        $('input-code').value = urlCode.toUpperCase();
+      }
+    };
+
+    function shuffle(arr) {
+      const copy = [...arr];
+      for (let i = copy.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [copy[i], copy[j]] = [copy[j], copy[i]];
+      }
+      return copy;
+    }
+
+    // 1. CREAR SALA (HOST)
+    $('btn-create').onclick = () => {
+      myName = $('input-name').value.trim();
+      if (!myName) return alert('Ingresa tu nombre');
+
+      isHost = true;
+      roomCode = Math.random().toString(36).substring(2, 7).toUpperCase();
+      const peerId = 'cartas-' + roomCode;
+
+      peer = new Peer(peerId);
+
+      peer.on('open', (id) => {
+        myId = id;
+        gameState.hostId = id;
+        gameState.code = roomCode;
+        gameState.players.push({
+          id: id,
+          name: myName,
+          score: 0,
+          hand: [],
+          isReady: false,
+          submittedCard: null
+        });
+
+        setupLobbyUI();
+      });
+
+      peer.on('connection', (conn) => {
+        clientConns.push(conn);
+        conn.on('data', (data) => handleHostData(conn, data));
+        conn.on('close', () => {
+          clientConns = clientConns.filter(c => c !== conn);
+        });
+      });
+
+      peer.on('error', (err) => {
+        alert('Error al crear sala: ' + err.type);
+      });
+    };
+
+    // 2. UNIRSE A SALA (CLIENTE)
+    $('btn-join').onclick = () => {
+      myName = $('input-name').value.trim();
+      roomCode = $('input-code').value.trim().toUpperCase();
+      if (!myName || !roomCode) return alert('Ingresa tu nombre y código');
+
+      isHost = false;
+      peer = new Peer();
+
+      peer.on('open', (id) => {
+        myId = id;
+        const targetHostId = 'cartas-' + roomCode;
+        hostConn = peer.connect(targetHostId);
+
+        hostConn.on('open', () => {
+          hostConn.send({ type: 'JOIN', name: myName, id: myId });
+          setupLobbyUI();
+        });
+
+        hostConn.on('data', (data) => {
+          if (data.type === 'STATE') {
+            render(data.state);
+          }
+        });
+
+        hostConn.on('error', () => {
+          alert('No se pudo conectar a la sala.');
+        });
+      });
+    };
+
+    function setupLobbyUI() {
+      $('screen-menu').classList.add('hidden');
+      $('screen-lobby').classList.remove('hidden');
+      $('text-room-code').innerText = roomCode;
+
+      const url = `${window.location.origin}${window.location.pathname}?room=${roomCode}`;
+      $('share-box').innerHTML = `Código: <strong>${roomCode}</strong><br><small>Link: ${url}</small>`;
+
+      if (isHost) {
+        $('host-controls').classList.remove('hidden');
+        $('wait-msg').classList.add('hidden');
+        broadcastState();
+      }
+    }
+
+    // MANEJO DE EVENTOS EN EL HOST
+    function handleHostData(conn, data) {
+      if (data.type === 'JOIN') {
+        if (gameState.state !== 'LOBBY') return;
+        gameState.players.push({
+          id: data.id,
+          name: data.name,
+          score: 0,
+          hand: [],
+          isReady: false,
+          submittedCard: null
+        });
+        broadcastState();
+      } else if (data.type === 'SUBMIT') {
+        processSubmitCard(data.playerId, data.cardId);
+      } else if (data.type === 'SELECT_WINNER') {
+        processSelectWinner(data.playerId, data.cardId);
+      }
+    }
+
+    function broadcastState() {
+      const zar = gameState.players[gameState.zarIndex];
+
+      // Enviar a cada cliente su estado personalizado
+      clientConns.forEach(conn => {
+        const pId = conn.peer;
+        conn.send({ type: 'STATE', state: getClientState(pId) });
+      });
+
+      // Renderizar el estado del Host
+      render(getClientState(myId));
+    }
+
+    function getClientState(pId) {
+      const zar = gameState.players[gameState.zarIndex];
+      const player = gameState.players.find(p => p.id === pId);
+
+      return {
+        code: gameState.code,
+        state: gameState.state,
+        hostId: gameState.hostId,
+        currentRound: gameState.currentRound,
+        totalRounds: gameState.rounds,
+        isZar: zar?.id === pId,
+        zarName: zar ? zar.name : '',
+        blackCard: gameState.currentBlackCard,
+        myHand: player ? player.hand : [],
+        players: gameState.players.map(p => ({
+          id: p.id,
+          name: p.name,
+          score: p.score,
+          isReady: p.isReady,
+          isZar: p.id === zar?.id
+        })),
+        submissions: (gameState.allSubmitted || gameState.winnerAnnounced) ? gameState.publicSubmissions : [],
+        roundWinner: gameState.roundWinner || null
+      };
+    }
+
+    // LÓGICA DE JUEGO (SOLO HOST)
+    $('btn-start').onclick = () => {
+      if (!isHost) return;
+      gameState.state = 'PLAYING';
+      gameState.rounds = parseInt($('select-rounds').value) || 10;
+      gameState.blackDeck = shuffle(blackCardsData);
+      gameState.whiteDeck = shuffle(whiteCardsData);
+      gameState.zarIndex = Math.floor(Math.random() * gameState.players.length);
+
+      startNextRound();
+    };
+
+    function startNextRound() {
+      gameState.currentRound++;
+      gameState.allSubmitted = false;
+      gameState.winnerAnnounced = false;
+      gameState.roundWinner = null;
+      gameState.publicSubmissions = [];
+
+      if (gameState.currentRound > gameState.rounds || gameState.blackDeck.length === 0) {
+        gameState.state = 'ENDED';
+        broadcastState();
+        return;
+      }
+
+      gameState.currentBlackCard = gameState.blackDeck.pop();
+
+      gameState.players.forEach(p => {
+        p.isReady = false;
+        p.submittedCard = null;
+        while (p.hand.length < 7 && gameState.whiteDeck.length > 0) {
+          p.hand.push(gameState.whiteDeck.pop());
+        }
+      });
+
+      broadcastState();
+    }
+
+    function processSubmitCard(pId, cardId) {
+      const zar = gameState.players[gameState.zarIndex];
+      const player = gameState.players.find(p => p.id === pId);
+
+      if (player && player.id !== zar.id && !player.isReady) {
+        const idx = player.hand.findIndex(c => c.id === cardId);
+        if (idx !== -1) {
+          const [card] = player.hand.splice(idx, 1);
+          player.submittedCard = { card, playerId: player.id };
+          player.isReady = true;
+
+          const activeParticipants = gameState.players.filter(p => p.id !== zar.id);
+          if (activeParticipants.every(p => p.isReady)) {
+            gameState.allSubmitted = true;
+            const submissions = activeParticipants.map(p => p.submittedCard);
+            gameState.publicSubmissions = shuffle(submissions.map(s => s.card));
+          }
+
+          broadcastState();
+        }
+      }
+    }
+
+    function processSelectWinner(pId, cardId) {
+      const zar = gameState.players[gameState.zarIndex];
+      if (zar.id === pId && gameState.allSubmitted) {
+        let winnerPlayer = null;
+        let winningCard = null;
+
+        for (const p of gameState.players) {
+          if (p.submittedCard && p.submittedCard.card.id === cardId) {
+            winnerPlayer = p;
+            winningCard = p.submittedCard.card;
+            p.score += 1;
+            break;
+          }
+        }
+
+        gameState.winnerAnnounced = true;
+        gameState.roundWinner = {
+          name: winnerPlayer ? winnerPlayer.name : 'Alguien',
+          cardText: winningCard ? winningCard.text : ''
+        };
+
+        gameState.zarIndex = (gameState.zarIndex + 1) % gameState.players.length;
+        broadcastState();
+
+        setTimeout(() => {
+          startNextRound();
+        }, 3500);
+      }
+    }
+
+    // ACCIONES DE CLIENTE
+    function submitCard(cardId) {
+      if (isHost) {
+        processSubmitCard(myId, cardId);
+      } else {
+        hostConn.send({ type: 'SUBMIT', playerId: myId, cardId });
+      }
+      $('status-box').innerText = '✓ Carta enviada. Esperando a los demás...';
+    }
+
+    function selectWinner(cardId) {
+      if (isHost) {
+        processSelectWinner(myId, cardId);
+      } else {
+        hostConn.send({ type: 'SELECT_WINNER', playerId: myId, cardId });
+      }
+    }
+
+    // RENDERIZAR EN INTERFAZ
+    function render(state) {
+      if (state.state === 'LOBBY') {
+        $('lobby-players').innerHTML = state.players.map(p => 
+          `<span class="badge">${p.name} ${p.id === state.hostId ? '(Host)' : ''}</span>`
+        ).join('');
+
+      } else if (state.state === 'PLAYING') {
+        $('screen-lobby').classList.add('hidden');
+        $('screen-game').classList.remove('hidden');
+
+        $('text-round').innerText = `Ronda ${state.currentRound} / ${state.totalRounds}`;
+        $('text-role').innerText = `Rol: ${state.isZar ? 'ZAR' : 'Participante'}`;
+        $('black-card').innerText = state.blackCard ? state.blackCard.text : '';
+
+        $('scoreboard').innerHTML = state.players.map(p =>
+          `<span class="badge">${p.name}: ${p.score}pt ${p.isReady ? '✓' : ''}</span>`
+        ).join('');
+
+        if (state.roundWinner) {
+          $('status-box').innerText = `🎉 ${state.roundWinner.name} ganó con: "${state.roundWinner.cardText}"`;
+        } else if (state.isZar) {
+          $('status-box').innerText = state.submissions.length > 0 ? 'Elige la respuesta ganadora:' : 'Eres el Zar. Esperando respuestas...';
+        } else {
+          $('status-box').innerText = 'Elige tu mejor carta de respuesta:';
+        }
+
+        if (state.isZar) {
+          $('hand-section').classList.add('hidden');
+          $('zar-section').classList.remove('hidden');
+
+          $('zar-cards').innerHTML = state.submissions.map(c =>
+            `<div class="card white-card" onclick="selectWinner(${c.id})">${c.text}</div>`
+          ).join('');
+
+        } else {
+          $('zar-section').classList.add('hidden');
+          $('hand-section').classList.remove('hidden');
+
+          $('hand-cards').innerHTML = state.myHand.map(c =>
+            `<div class="card white-card" onclick="submitCard(${c.id})">${c.text}</div>`
+          ).join('');
+        }
+
+      } else if (state.state === 'ENDED') {
+        $('screen-game').classList.add('hidden');
+        $('screen-end').classList.remove('hidden');
+
+        const sorted = [...state.players].sort((a,b) => b.score - a.score);
+        $('winner-text').innerText = `¡${sorted[0].name} es el Ganador!`;
+        $('final-scores').innerHTML = sorted.map(p =>
+          `<span class="badge">${p.name}: ${p.score} pts</span>`
+        ).join('');
+      }
+    }
+  </script>
+</body>
+</html>
